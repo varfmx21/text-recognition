@@ -1,136 +1,162 @@
+from dataclasses import dataclass
+from enum import Enum
+from sys import argv
+
 import cv2
-import numpy as np
-import matplotlib.pyplot as plt
 import easyocr
-from langdetect import detect, LangDetectException
-from langdetect.lang_detect_exception import ErrorCode
+import langdetect
+import matplotlib.pyplot as plt
+import numpy as np
+from cv2.typing import MatLike
+from langdetect import LangDetectException
 
-# Inicializar EasyOCR una sola vez (proceso costoso)
-reader = easyocr.Reader(['es', 'en'])
 
-LANGUAGE_NAMES = {
-    'es': 'Español',
-    'en': 'Inglés',
+class Language(Enum):
+    """available languages enum"""
+
+    SPANISH = "es"
+    ENGLISH = "en"
+
+    def __str__(self):
+        return self.name.lower()
+
+
+LanguageColor = {
+    Language.SPANISH: (0, 255, 0),
+    Language.ENGLISH: (255, 0, 0),
+    None: (0, 0, 255),
 }
 
-def detect_language(text):
-    """Detecta el idioma del texto proporcionado.
-    
-    Args:
-        text: Texto a analizar
-        
-    Returns:
-        Tuple: (código_idioma, nombre_idioma)
-    """
-    if not text or len(text) < 10:  # Aumentado el mínimo para mejor detección
-        return "desconocido", "Texto demasiado corto"
-    
-    try:
-        lang_code = detect(text)
-        lang_name = LANGUAGE_NAMES.get(lang_code, f"Desconocido ({lang_code})")
-        return lang_code, lang_name
-    except LangDetectException as e:
-        if e.code == ErrorCode.CantDetectError:
-            return "desconocido", "No se pudo detectar"
-        return "error", f"Error: {str(e)}"
 
-def simple_text_detection(image_path):
-    """Enfoque simplificado para detección de texto con preprocesamiento mínimo."""
-    # 1. Cargar imagen
+@dataclass
+class RecognitionResult:
+    text: str
+    language: Language | None
+    image_processing: list[tuple[MatLike, str, dict]]  # image and title kwargs
+
+
+def recognize_language(text: str) -> tuple[Language | None, str]:
+    """recognize the language in the text."""
+
+    if len(text) < 10:
+        return None, "text too short"
+
+    try:
+        lang_code = langdetect.detect(text)
+        return Language(lang_code), "recognized"
+    except ValueError:
+        return None, "language not supported"
+    except LangDetectException as e:
+        if e.code == langdetect.lang_detect_exception.ErrorCode.CantDetectError:
+            return None, "can't recognize language"
+        return None, f"error: {str(e)}"
+
+
+def simple_text_recognition(image_path: str) -> RecognitionResult:
+    """simple text recognition, minimizing processing"""
+
     image = cv2.imread(image_path)
     if image is None:
-        raise FileNotFoundError(f"No se pudo cargar la imagen: '{image_path}'")
-    
-    # 2. Convertir a escala de grises
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # 3. Binarización con umbral de Otsu (más simple que adaptativa)
-    # Otsu encuentra automáticamente el umbral óptimo
-    _, binary = cv2.threshold(gray, 50, 250, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    
-    # 4. Opcional: Eliminar ruido con filtro mediana (aumentamos kernel para mayor efecto)
-    denoised = cv2.medianBlur(binary, 3)
-    
-    # 5. Mejorar contraste con operaciones morfológicas simples
-    # Dilatación para conectar componentes de texto
-    kernel = np.ones((2, 2), np.uint8)
-    dilated = cv2.dilate(denoised, kernel, iterations=1)
-    
-    # 6. Aplicar OCR directamente sobre la imagen original
-    # (EasyOCR suele funcionar bien con la imagen original)
-    results = reader.readtext(image)
-    
-    # 7. Preparar visualización
-    result_image = image.copy()
-    
-    # Recolectar todo el texto en un solo string
-    all_text_fragments = []
-    bounding_boxes = []
-    
-    for (bbox, text, prob) in results:
-        if text.strip():
-            all_text_fragments.append(text.strip())
-            bounding_boxes.append((bbox, text, prob))
-    
-    # Unir todos los fragmentos de texto con espacios
-    complete_text = " ".join(all_text_fragments)
-    print(f"\nTexto completo extraído:\n{complete_text}\n")
-    
-    # Detectar idioma del texto completo
-    lang_code, lang_name = detect_language(complete_text)
-    print(f"Idioma detectado: {lang_name} ({lang_code})")
-    
-    # Color según idioma determinado
-    if lang_code == 'es':
-        color = (0, 255, 0)  # Verde para español
-    elif lang_code == 'en':
-        color = (255, 0, 0)  # Azul para inglés
-    else:
-        color = (0, 0, 255)  # Rojo para otros idiomas
-    
-    # Dibujar todos los rectángulos con el mismo color (del idioma detectado)
-    for (bbox, text, prob) in bounding_boxes:
-        pts = np.array(bbox, np.int32).reshape((-1, 1, 2))
-        cv2.polylines(result_image, [pts], True, color, 2)
-        
-        # Mostrar información en la consola para cada fragmento
-        print(f"Fragmento detectado ({prob:.2f}): '{text}'")
-        
-        # Añadir etiqueta en la imagen
-        x, y = bbox[0]
-        cv2.putText(result_image, f"{text}", (int(x), int(y)-10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
-    # 8. Visualización del proceso
-    plt.figure(figsize=(15, 10))
-    plt.subplot(231), plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)), plt.title('Original')
-    plt.subplot(232), plt.imshow(gray, cmap='gray'), plt.title('Escala de grises')
-    plt.subplot(233), plt.imshow(binary, cmap='gray'), plt.title('Binarización Otsu')
-    plt.subplot(234), plt.imshow(denoised, cmap='gray'), plt.title('Eliminación de ruido')
-    plt.subplot(235), plt.imshow(dilated, cmap='gray'), plt.title('Dilatación')
-    plt.subplot(236), plt.imshow(cv2.cvtColor(result_image, cv2.COLOR_BGR2RGB)), plt.title(f'Resultado: {lang_name}')
-    plt.tight_layout()
-    plt.show()
-    
-    # Crear un diccionario con el texto completo y su idioma
-    result = {
-        'text': complete_text,
-        'language_code': lang_code,
-        'language': lang_name,
-    }
-    
-    return result
+        raise FileNotFoundError(f"invalid image path: '{image_path}'")
 
-def display_results(result):
-    """Muestra un resumen de los resultados."""
-    print("\n===== RESUMEN DE ANÁLISIS =====")
-    print(f"Idioma detectado: {result['language']}")
-    print(f"Texto completo:\n{result['text']}")
+    # gray scale conversion
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # OTSU threshold binization (simpler than adaptive, Otsu finds optimal)
+    _, binary = cv2.threshold(gray, 50, 250, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # filter noise with median blur (increment effect with greater kernel)
+    denoised = cv2.medianBlur(binary, 3)
+
+    # upgrade contrast with simple morphologic operations
+    kernel = np.ones((2, 2), np.uint8)
+
+    # dilate for connecting text elements
+    dilated = cv2.dilate(denoised, kernel, iterations=1)
+
+    # apply ocr in the original image
+    recognized_text = READER.readtext(image)
+
+    text_fragments = []
+    bounding_boxes = []
+    for bbox, text, prob in recognized_text:
+        if text.strip():
+            text_fragments.append(text.strip())
+            bounding_boxes.append((bbox, text, prob))
+
+    complete_text = " ".join(text_fragments)
+
+    language, lang_recognition_st = recognize_language(complete_text)
+    if language is None:
+        print(lang_recognition_st)
+    print(f"{language} {lang_recognition_st}")
+
+    lang_color = LanguageColor[language]
+
+    bounded_image = image.copy()
+    for bbox, text, prob in bounding_boxes:
+        pts = np.array(bbox, np.int32).reshape((-1, 1, 2))
+        cv2.polylines(bounded_image, [pts], True, lang_color, 2)
+
+        x, y = bbox[0]
+        cv2.putText(
+            bounded_image,
+            f"{text}",
+            (int(x), int(y) - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            lang_color,
+            2,
+        )
+
+    return RecognitionResult(
+        complete_text,
+        language,
+        [
+            (image, "original", {}),
+            (gray, "gray", {"cmap": "gray"}),
+            (binary, "binary", {"cmap": "gray"}),
+            (denoised, "denoised", {"cmap": "gray"}),
+            (dilated, "dilated", {"cmap": "gray"}),
+            (bounded_image, "bounded image", {}),
+        ],
+    )
+
+
+def display_results(result: RecognitionResult) -> None:
+    """displays resume of results"""
+
+    print("\n===== RESULTS =====")
+    print(f"language recognized: {result.language}")
+    print(f"text recognized:\n{result.text}")
+
+    # image processing visualization
+
+    plt.figure(figsize=(15, 10))
+    for image, title, kwargs in result.image_processing:
+        plt.imshow(image, **kwargs)
+        plt.title(title)
+
+        plt.axis("off")
+        plt.draw()
+
+        plt.waitforbuttonpress()
+
+
+def main() -> None:
+    global READER
+
+    if len(argv) != 2:
+        print(f"Usage: {argv[0]} image_path")
+        return
+
+    # initialize easyocr reader
+    READER = easyocr.Reader([lang.value for lang in Language])
+
+    image_path = argv[1]
+    result = simple_text_recognition(image_path)
+    display_results(result)
+
 
 if __name__ == "__main__":
-    # Ejecutar la detección simplificada
-    image_path = "img-03.jpeg"
-    result = simple_text_detection(image_path)
-    
-    # Mostrar resumen
-    display_results(result)
+    main()
