@@ -18,9 +18,12 @@ class Language(Enum):
     ENGLISH = "en"
 
     def __str__(self):
+        """parse enum to its identifier in lowercase"""
+
         return self.name.lower()
 
 
+# map supported languages to their color identifier
 LanguageColor = {
     Language.SPANISH: (0, 255, 0),
     Language.ENGLISH: (255, 0, 0),
@@ -28,25 +31,28 @@ LanguageColor = {
 }
 
 
-@dataclass
+#
 class RecognitionResult:
+    """result state after text recognition"""
+
     text: str
     language: Language | None
-    image_processing: list[tuple[MatLike, str, dict]]  # image and title kwargs
+    image_processing: list[tuple[MatLike, str, dict]]  # (image, title, kwargs)
 
 
 def recognize_language(text: str) -> tuple[Language | None, str]:
-    """recognize the language in the text."""
+    """recognize the language in the text"""
 
     if len(text) < 10:
         return None, "text too short"
 
+    # try to parse the language code
     try:
         lang_code = langdetect.detect(text)
         return Language(lang_code), "recognized"
-    except ValueError:
+    except ValueError:  # code not in Language enum
         return None, "language not supported"
-    except LangDetectException as e:
+    except LangDetectException as e:  # no language recognized
         if e.code == langdetect.lang_detect_exception.ErrorCode.CantDetectError:
             return None, "can't recognize language"
         return None, f"error: {str(e)}"
@@ -77,6 +83,7 @@ def simple_text_recognition(image_path: str) -> RecognitionResult:
     # apply ocr in the original image
     recognized_text = READER.readtext(image)
 
+    # parse fragments and bounding boxes
     text_fragments = []
     bounding_boxes = []
     for bbox, text, prob in recognized_text:
@@ -86,6 +93,7 @@ def simple_text_recognition(image_path: str) -> RecognitionResult:
 
     complete_text = " ".join(text_fragments)
 
+    # recognize language
     language, lang_recognition_st = recognize_language(complete_text)
     if language is None:
         print(lang_recognition_st)
@@ -93,6 +101,7 @@ def simple_text_recognition(image_path: str) -> RecognitionResult:
 
     lang_color = LanguageColor[language]
 
+    # draw bounding boxes in the original image
     bounded_image = image.copy()
     for bbox, text, prob in bounding_boxes:
         pts = np.array(bbox, np.int32).reshape((-1, 1, 2))
@@ -131,7 +140,6 @@ def display_results(result: RecognitionResult) -> None:
     print(f"text recognized:\n{result.text}")
 
     # image processing visualization
-
     plt.figure(figsize=(15, 10))
     for image, title, kwargs in result.image_processing:
         plt.imshow(image, **kwargs)
