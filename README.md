@@ -27,5 +27,5 @@ python3 main.py _path_to_image_
 
 # Flujo de filtros
 
-![processing flow img](URL "Image Processing Flow")
+![processing flow img](images/diagrama-flujo.png)
 
